@@ -3,7 +3,7 @@ import {
   getCurrentlyPlaying,
   getSpotifyAnalysis,
   getSpotifyFeatures,
-  Section,
+  getUserPlaylists,
 } from "./spotifyApi";
 import { SelfUpdatingTokenCache } from "./SpotifyTokenCache";
 
@@ -13,18 +13,42 @@ export interface TrackInformation {
   analysis: SpotifyApi.AudioAnalysisResponse;
   features: SpotifyApi.AudioFeaturesResponse;
 }
+
+export interface PlaylistInfo {
+  id: string;
+  name: string;
+  description: string;
+  snapshot_id: string;
+  tracks: {
+    total: number;
+  };
+  owner: {
+    id: string;
+    display_name: string;
+  };
+}
+
 interface SpotifyNowPlayingEvents {
   isPlaying: (isPlaying: boolean) => void;
   trackChanged: (trackInformation: TrackInformation) => void;
+  playlistCreated: (playlist: PlaylistInfo) => void;
+  playlistModified: (playlist: PlaylistInfo) => void;
+  playlistDeleted: (playlistId: PlaylistInfo) => void;
 }
 
 export class SpotifyNowPlayingEmitter extends TypedEmitter<SpotifyNowPlayingEvents> {
   private interval: NodeJS.Timer | undefined;
+  private playlistInterval: NodeJS.Timer | undefined;
   private isPlaying = false;
   private trackId = "";
-  private hasOutboundRequest: boolean;
+  private hasOutboundRequest: boolean = false;
+  private hasOutboundPlaylistRequest: boolean = false;
+  private playlistCache: Map<string, PlaylistInfo> | null = null;
 
-  constructor(private tokenCache: SelfUpdatingTokenCache) {
+  constructor(
+    private tokenCache: SelfUpdatingTokenCache,
+    private playlistPollingIntervalMs: number = 5000
+  ) {
     super();
   }
 
@@ -48,17 +72,20 @@ export class SpotifyNowPlayingEmitter extends TypedEmitter<SpotifyNowPlayingEven
           accessToken.accessToken
         );
 
-        if (this.isPlaying !== currentlyPlaying.is_playing) {
+        if (
+          currentlyPlaying != null &&
+          this.isPlaying !== currentlyPlaying.is_playing
+        ) {
           this.isPlaying = currentlyPlaying.is_playing;
           this.emit("isPlaying", this.isPlaying);
         }
 
-        const id = currentlyPlaying.item?.id;
+        const id = currentlyPlaying?.item?.id;
 
         if (
           id != null &&
           this.trackId !== id &&
-          currentlyPlaying.currently_playing_type === "track"
+          currentlyPlaying?.currently_playing_type === "track"
         ) {
           this.trackId = id;
           const [analysis, features] = await Promise.all([
@@ -79,13 +106,107 @@ export class SpotifyNowPlayingEmitter extends TypedEmitter<SpotifyNowPlayingEven
       this.hasOutboundRequest = false;
     }, 1000);
 
+    // Start playlist monitoring
+    this.startPlaylistMonitoring();
+
     return this;
+  }
+
+  private startPlaylistMonitoring() {
+    if (this.playlistInterval) {
+      console.warn("[PlaylistMonitor] Already started");
+      return;
+    }
+
+    // Initial fetch of playlists
+    this.pollPlaylists();
+
+    this.playlistInterval = setInterval(() => {
+      this.pollPlaylists();
+    }, this.playlistPollingIntervalMs);
+  }
+
+  private async pollPlaylists() {
+    if (this.hasOutboundPlaylistRequest) {
+      return;
+    }
+
+    try {
+      this.hasOutboundPlaylistRequest = true;
+      const accessToken = await this.tokenCache.getToken();
+      if (!accessToken) {
+        return;
+      }
+
+      // Get current playlists
+      const userPlaylists = await getUserPlaylists(accessToken.accessToken);
+      const currentPlaylists = new Map<string, PlaylistInfo>();
+
+      // Process each playlist
+      for (const playlist of userPlaylists.items) {
+        const playlistInfo: PlaylistInfo = {
+          id: playlist.id,
+          name: playlist.name,
+          description: playlist.description || "",
+          snapshot_id: playlist.snapshot_id,
+          tracks: {
+            total: playlist.tracks.total,
+          },
+          owner: {
+            id: playlist.owner.id,
+            display_name: playlist.owner.display_name || playlist.owner.id,
+          },
+        };
+
+        currentPlaylists.set(playlist.id, playlistInfo);
+
+        if (this.playlistCache != null) {
+          // Check if this is a new playlist
+          if (!this.playlistCache.has(playlist.id)) {
+            this.emit("playlistCreated", playlistInfo);
+          }
+          // Check if playlist was modified
+          else {
+            const cachedPlaylist = this.playlistCache?.get(playlist.id)!;
+            if (
+              cachedPlaylist?.snapshot_id !== playlistInfo.snapshot_id ||
+              cachedPlaylist?.tracks.total !== playlistInfo.tracks.total ||
+              cachedPlaylist?.name !== playlistInfo.name ||
+              cachedPlaylist?.description !== playlistInfo.description
+            ) {
+              this.emit("playlistModified", playlistInfo);
+            }
+          }
+        }
+      }
+
+      // Check for deleted playlists
+      if (this.playlistCache != null) {
+        for (const [id, info] of this.playlistCache.entries()) {
+          if (!currentPlaylists.has(id)) {
+            this.emit("playlistDeleted", info);
+          }
+        }
+      }
+
+      // Update the cache
+      this.playlistCache = currentPlaylists;
+    } catch (e) {
+      console.error("[PlaylistMonitor] Error updating playlists", e);
+    }
+
+    this.hasOutboundPlaylistRequest = false;
   }
 
   stop() {
     if (this.interval) {
       clearInterval(this.interval as any);
       this.interval = undefined;
+    }
+
+    if (this.playlistInterval) {
+      clearInterval(this.playlistInterval as any);
+      this.playlistInterval = undefined;
     }
   }
 }

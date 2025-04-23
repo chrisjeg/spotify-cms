@@ -1,4 +1,3 @@
-import { computeModule } from "./computeModule";
 import { getSpotifyToken, TokenData } from "./spotifyApi";
 
 export class SelfUpdatingTokenCache {
@@ -7,6 +6,8 @@ export class SelfUpdatingTokenCache {
   constructor(
     initialAccessToken: string,
     initialRefreshToken: string,
+    private clientId: string,
+    private clientSecret: string,
     scope = "user-read-currently-playing"
   ) {
     this.token = {
@@ -27,8 +28,8 @@ export class SelfUpdatingTokenCache {
           grant_type: "refresh_token",
           refresh_token: userTokenInfo.refreshToken,
         },
-        computeModule.getCredential("SpotifyApi", "ClientId"),
-        computeModule.getCredential("SpotifyApi", "ClientSecret")
+        this.clientId,
+        this.clientSecret
       );
       this.token = tokenResponse;
       return tokenResponse;
