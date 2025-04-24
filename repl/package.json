@@ -1,0 +1,23 @@
+{
+  "name": "spotify-api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "@palantir/compute-module": "^0.2.6",
+    "@sinclair/typebox": "^0.32.31",
+    "typescript": "^5.3.3"
+  },
+  "scripts": {
+    "build": "tsc",
+    "tokens": "nodemon src/tokenCapture.ts",
+    "dev": "nodemon src/index.ts"
+  },
+  "author": "Christopher Jeganathan",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "nodemon": "^3.1.7",
+    "ts-node": "^10.9.2"
+  }
+}
