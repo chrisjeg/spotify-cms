@@ -67,6 +67,48 @@ export const addTracksToPlaylist = async (
   return data;
 };
 
+export const removeTracksFromPlaylist = async (
+  accessToken: string,
+  playlistId: string,
+  uris: string[]
+) => {
+  const { data } =
+    await axios.delete<SpotifyApi.RemoveTracksFromPlaylistResponse>(
+      `https://api.spotify.com/v1/playlists/${playlistId}/tracks`,
+      {
+        headers: {
+          Authorization: "Bearer " + accessToken,
+        },
+        data: {
+          tracks: uris.map((uri) => ({ uri })),
+        },
+      }
+    );
+
+  return data;
+};
+
+export const getTracksFromPlaylist = async (
+  accessToken: string,
+  playlistId: string,
+  limit: number = 100,
+  offset: number = 0
+) => {
+  const { data } = await axios.get<SpotifyApi.PlaylistTrackResponse>(
+    `https://api.spotify.com/v1/playlists/${playlistId}/tracks`,
+    {
+      headers: {
+        Authorization: "Bearer " + accessToken,
+      },
+      params: {
+        limit,
+        offset,
+      },
+    }
+  );
+  return data;
+};
+
 /**
  * Gets the user's currently playing track
  * @param accessToken Spotify API access token
