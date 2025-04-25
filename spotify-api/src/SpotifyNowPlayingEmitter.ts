@@ -55,7 +55,7 @@ export class SpotifyEmitter extends TypedEmitter<SpotifyEmitterEvents> {
   /**
    * Get the current playlist cache
    */
-  get playlistCache(): Map<string, PlaylistInfo> | null {
+  getPlaylistCache(): Map<string, PlaylistInfo> | null {
     return this._playlistCache;
   }
 
@@ -170,17 +170,18 @@ export class SpotifyEmitter extends TypedEmitter<SpotifyEmitterEvents> {
         if (this._playlistCache != null) {
           // Check if this is a new playlist
           if (!this._playlistCache.has(playlist.id)) {
+            this._playlistCache.set(playlist.id, playlistInfo);
             this.emit("playlistCreated", playlistInfo);
           }
           // Check if playlist was modified
           else {
             const cachedPlaylist = this._playlistCache?.get(playlist.id)!;
             if (
-              cachedPlaylist?.snapshot_id !== playlistInfo.snapshot_id ||
               cachedPlaylist?.tracks.total !== playlistInfo.tracks.total ||
               cachedPlaylist?.name !== playlistInfo.name ||
               cachedPlaylist?.description !== playlistInfo.description
             ) {
+              this._playlistCache.set(playlist.id, playlistInfo);
               this.emit("playlistModified", playlistInfo);
             }
           }
@@ -191,13 +192,15 @@ export class SpotifyEmitter extends TypedEmitter<SpotifyEmitterEvents> {
       if (this._playlistCache != null) {
         for (const [id, info] of this._playlistCache.entries()) {
           if (!currentPlaylists.has(id)) {
+            this._playlistCache.delete(id);
             this.emit("playlistDeleted", info);
           }
         }
       }
 
-      // Update the cache
-      this._playlistCache = currentPlaylists;
+      if (this._playlistCache == null) {
+        this._playlistCache = currentPlaylists;
+      }
     } catch (e) {
       console.error("[PlaylistMonitor] Error updating playlists", e);
     }

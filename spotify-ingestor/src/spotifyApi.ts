@@ -229,6 +229,29 @@ export interface TokenData {
   scope: string;
 }
 
+export const modifyPlaylistDetails = async (
+  accessToken: string,
+  playlistId: string,
+  name: string,
+  description: string
+) => {
+  const { data } = await axios.put<SpotifyApi.ChangePlaylistDetailsResponse>(
+    `https://api.spotify.com/v1/playlists/${playlistId}`,
+    {
+      name,
+      description,
+      public: null,
+    },
+    {
+      headers: {
+        Authorization: "Bearer " + accessToken,
+      },
+    }
+  );
+
+  return data;
+};
+
 /**
  * Gets or refreshes a Spotify API token
  * @param request Token request parameters

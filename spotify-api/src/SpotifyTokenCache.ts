@@ -6,7 +6,9 @@ export class SelfUpdatingTokenCache {
   constructor(
     initialAccessToken: string,
     initialRefreshToken: string,
-    scope = "user-read-currently-playing playlist-read-private user-top-read playlist-modify-private"
+    private clientId: string,
+    private clientSecret: string,
+    scope = "user-read-currently-playing"
   ) {
     this.token = {
       accessToken: initialAccessToken,
@@ -16,10 +18,7 @@ export class SelfUpdatingTokenCache {
     };
   }
 
-  public async getToken(
-    clientId: string,
-    clientSecret: string
-  ): Promise<TokenData> {
+  public async getToken(): Promise<TokenData> {
     const userTokenInfo: TokenData | undefined = this.token;
 
     if (userTokenInfo == null || userTokenInfo.expiryTime < Date.now()) {
@@ -29,8 +28,8 @@ export class SelfUpdatingTokenCache {
           grant_type: "refresh_token",
           refresh_token: userTokenInfo.refreshToken,
         },
-        clientId,
-        clientSecret
+        this.clientId,
+        this.clientSecret
       );
       this.token = tokenResponse;
       return tokenResponse;

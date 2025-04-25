@@ -1,8 +1,5 @@
 import { SelfUpdatingTokenCache } from "./SpotifyTokenCache";
-import {
-  SpotifyNowPlayingEmitter,
-  PlaylistInfo,
-} from "./SpotifyNowPlayingEmitter";
+import { SpotifyEmitter, PlaylistInfo } from "./SpotifyNowPlayingEmitter";
 import { computeModule, developGetCredential } from "./computeModule";
 
 const accessToken = developGetCredential("SpotifyApi", "AccessToken");
@@ -29,7 +26,7 @@ const spotifyTokenCache = new SelfUpdatingTokenCache(
   clientSecret,
   "user-read-currently-playing "
 );
-const currentMusicEmitter = new SpotifyNowPlayingEmitter(spotifyTokenCache);
+const currentMusicEmitter = new SpotifyEmitter(spotifyTokenCache);
 
 currentMusicEmitter.start();
 currentMusicEmitter.on("trackChanged", (trackInformation) => {
@@ -120,7 +117,7 @@ currentMusicEmitter.on("playlistCreated", (playlist: PlaylistInfo) => {
   if (playlistResource) {
     writeToStream(
       playlistResource.rid,
-      "ri.foundry-streaming.main.view.playlists", // Replace with your actual view RID
+      "ri.foundry-streaming.main.view.dfc9bad2-0e60-461c-8bbe-8023aa251c96", // Replace with your actual view RID
       row
     );
   }
@@ -146,7 +143,7 @@ currentMusicEmitter.on("playlistModified", (playlist: PlaylistInfo) => {
   if (playlistResource) {
     writeToStream(
       playlistResource.rid,
-      "ri.foundry-streaming.main.view.playlists", // Replace with your actual view RID
+      "ri.foundry-streaming.main.view.dfc9bad2-0e60-461c-8bbe-8023aa251c96", // Replace with your actual view RID
       row
     );
   }
@@ -159,7 +156,7 @@ currentMusicEmitter.on("playlistDeleted", (playlist: PlaylistInfo) => {
   if (playlistResource) {
     writeToStream(
       playlistResource.rid,
-      "ri.foundry-streaming.main.view.playlists", // Replace with your actual view RID
+      "ri.foundry-streaming.main.view.dfc9bad2-0e60-461c-8bbe-8023aa251c96",
       {
         id: playlist.id,
         name: playlist.name,
@@ -168,6 +165,7 @@ currentMusicEmitter.on("playlistDeleted", (playlist: PlaylistInfo) => {
         tracks_total: playlist.tracks.total,
         owner_id: playlist.owner.id,
         owner_name: playlist.owner.display_name,
+        lastModified: Date.now(),
         isDeleted: true,
         operation: "DELETE", // Optional metadata about the operation type
       }
