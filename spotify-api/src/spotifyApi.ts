@@ -227,14 +227,13 @@ export const getUserPlaylists = async (
           },
         }
       );
-      if (allPlaylists.length === 0) {
-        console.log(JSON.stringify(data.items.map((d) => d.name).slice(0, 5)));
-      }
       allPlaylists = [...allPlaylists, ...data.items];
       url = data.next || "";
     }
 
-    console.log(`Fetched ${allPlaylists.length} playlists from Spotify API`);
+    console.log(
+      `Fetched ${allPlaylists.length} playlists from Spotify API. Latest: ${allPlaylists[0].name}`
+    );
 
     return {
       items: allPlaylists,

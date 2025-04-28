@@ -17,7 +17,7 @@ export abstract class BaseSpotifyOntologySubscription<T> {
   constructor(
     protected client: Client,
     protected spotifyTokenCache: SelfUpdatingTokenCache,
-    protected logPrefix: string = "Spotify subscription"
+    protected logPrefix: string = "OSW Spotify subscription"
   ) {}
 
   // Calculate reconnect delay with exponential backoff
@@ -149,12 +149,26 @@ export class SpotifyPlaylistOntologySubscription extends BaseSpotifyOntologySubs
   }
 
   // Handling playlist changes
-  private async handleChange(event: any) {
-    console.log(event);
-    if (event.state === "ADDED_OR_UPDATED") {
-      console.log("Playlist added or updated in Spotify", event.object);
+  private async handleChange(event: {
+    state: string;
+    object: Partial<Osdk.Instance<SpotifyPlaylist>>;
+  }) {
+    const playlistCache = this.currentMusicEmitter.getPlaylistCache();
+    if (playlistCache == null) {
+      console.log("Playlist cache is null, skipping update");
+      return;
+    }
+    const name =
+      event.object.name ?? playlistCache.get(event.object.playlistId)?.name;
 
-      const playlistCache = this.currentMusicEmitter.getPlaylistCache();
+    if (!name?.toLocaleLowerCase().includes("aip")) {
+      console.log("Playlist name does not include 'aip', skipping update");
+      return;
+    }
+
+    if (event.state === "ADDED_OR_UPDATED") {
+      console.log("Playlist added or updated in Foundry", event.object);
+
       if (playlistCache == null) {
         console.log("Playlist cache is null, skipping update");
         return;
@@ -164,7 +178,7 @@ export class SpotifyPlaylistOntologySubscription extends BaseSpotifyOntologySubs
       if (playlistInfo == null) {
         const token = await this.spotifyTokenCache.getToken();
         console.log(
-          "Playlist not in cache - creating new playlist",
+          "Playlist not in cache - creating new playlist in Spotify",
           event.object
         );
         await Spotify.createPlaylist(
@@ -179,13 +193,16 @@ export class SpotifyPlaylistOntologySubscription extends BaseSpotifyOntologySubs
           playlistInfo
         );
         if (playlistMatchesCache) {
-          console.log("Playlist matches cache, skipping update", event.object);
+          console.log(
+            "Playlist matches cache, skipping update",
+            event.object.playlistId
+          );
           return;
         }
-        console.log("Playlist does not match cache - modifying playlist", {
-          event,
-          playlistInfo,
-        });
+        console.log(
+          "Playlist does not match cache - modifying playlist in Spotify. Replacing:",
+          playlistInfo
+        );
         const token = await this.spotifyTokenCache.getToken();
         await Spotify.modifyPlaylistDetails(
           token.accessToken,
@@ -199,12 +216,24 @@ export class SpotifyPlaylistOntologySubscription extends BaseSpotifyOntologySubs
 
   // Helper function to check if object matches playlist
   private objectMatchesPlaylist(
-    object: Osdk.Instance<SpotifyPlaylist>,
+    object: Partial<Osdk.Instance<SpotifyPlaylist>>,
     playlistInfo: PlaylistInfo
   ) {
+    // Normalize strings to handle whitespace and character encoding differences
+    const normalizeString = (str?: string): string => {
+      return str
+        ?.replace(/\s+/g, " ") // Replace multiple spaces with a single space
+        .replace(/&#x27;/g, "'") // Replace HTML encoded apostrophes
+        .replace(/&quot;/g, '"') // Replace HTML encoded quotes
+        .replace(/&amp;/g, "&") // Replace HTML encoded ampersands
+        .trim() // Remove leading/trailing whitespace
+        .toLowerCase(); // Case insensitive comparison
+    };
+
     return (
-      object.name === playlistInfo.name &&
-      object.description === playlistInfo.description &&
+      normalizeString(object.name) === normalizeString(playlistInfo.name) &&
+      normalizeString(object.description) ===
+        normalizeString(playlistInfo.description) &&
       object.owner === playlistInfo.owner.id &&
       object.tracksCount === `${playlistInfo.tracks.total}`
     );

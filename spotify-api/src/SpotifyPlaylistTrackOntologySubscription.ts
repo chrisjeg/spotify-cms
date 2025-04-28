@@ -4,17 +4,20 @@ import { SelfUpdatingTokenCache } from "./SpotifyTokenCache";
 import { BaseSpotifyOntologySubscription } from "./SpotifyPlaylistOntologySubscription";
 import * as Spotify from "./spotifyApi";
 
-// Interface for track cache entries
-interface TrackCacheEntry {
-  playlistId: string;
-  trackUri: string;
+// Track operation types for tracking state
+enum TrackOperation {
+  ADD,
+  DELETE,
 }
 
-// Specialized class for Spotify playlist tracks subscriptions
+// Track entry with operation type
+interface TrackEntry {
+  track: Osdk.Instance<SpotifyPlaylistTrack>;
+  operation: TrackOperation;
+}
+
 export class SpotifyPlaylistTrackOntologySubscription extends BaseSpotifyOntologySubscription<SpotifyPlaylistTrack> {
-  // Track cache to batch operations
-  private trackCache: Map<string, Osdk.Instance<SpotifyPlaylistTrack>[]> =
-    new Map();
+  private operationsCache: Map<string, Map<string, TrackEntry>> = new Map();
   private flushInterval: NodeJS.Timeout | null = null;
   private readonly FLUSH_INTERVAL_MS = 1000; // Flush every second
 
@@ -48,22 +51,39 @@ export class SpotifyPlaylistTrackOntologySubscription extends BaseSpotifyOntolog
 
     this.subscription = this.client(SpotifyPlaylistTrack).subscribe({
       onChange: async (event) => {
-        console.log(event);
-        if (event.state === "ADDED_OR_UPDATED") {
-          console.log(
-            "Playlist track added or updated in Spotify",
+        console.log(
+          `Playlist track event detected for playlist ${JSON.stringify(
             event.object
-          );
+          )}`
+        );
+        try {
+          // Extract track info from event
+          const playlistId = event.object.playlistId;
 
-          try {
-            // Extract track info from event
-            const playlistId = event.object.playlistId;
+          if (event.state === "ADDED_OR_UPDATED") {
+            console.log(
+              "Playlist track added or updated in Foundry",
+              event.object
+            );
 
-            // Add to cache instead of directly adding to playlist
-            this.addToCache(playlistId, event.object);
-          } catch (error) {
-            console.error("Error handling playlist track change:", error);
+            // Record as an addition
+            this.addToOperationsCache(
+              playlistId,
+              event.object,
+              TrackOperation.ADD
+            );
+          } else if (event.state === "REMOVED") {
+            console.log("Playlist track deletion detected", event.object);
+
+            // Record as a deletion
+            this.addToOperationsCache(
+              playlistId,
+              event.object,
+              TrackOperation.DELETE
+            );
           }
+        } catch (error) {
+          console.error("Error handling playlist track event:", error);
         }
       },
       onSuccessfulSubscription: () => {
@@ -106,79 +126,194 @@ export class SpotifyPlaylistTrackOntologySubscription extends BaseSpotifyOntolog
     super.unsubscribe();
   }
 
-  // Add track to the internal cache
-  private addToCache(
+  // Add track to operations cache with proper operation type
+  private addToOperationsCache(
     playlistId: string,
-    track: Osdk.Instance<SpotifyPlaylistTrack>
+    track: Osdk.Instance<SpotifyPlaylistTrack>,
+    operation: TrackOperation
   ) {
-    if (!this.trackCache.has(playlistId)) {
-      this.trackCache.set(playlistId, []);
+    // Create playlist entry in cache if it doesn't exist
+    if (!this.operationsCache.has(playlistId)) {
+      this.operationsCache.set(playlistId, new Map());
     }
 
-    const tracks = this.trackCache.get(playlistId);
-    const existingIndex = tracks?.findIndex(
-      (entry) => entry.$primaryKey === track.$primaryKey
-    );
-    if (existingIndex !== undefined && existingIndex >= 0) {
-      tracks[existingIndex] = track; // Update existing track
-    } else {
-      tracks?.push(track); // Add new track
+    const playlistTracks = this.operationsCache.get(playlistId)!;
+    const trackKey = track.$primaryKey;
+
+    // If this track already has an operation in the cache:
+    if (playlistTracks.has(trackKey)) {
+      const currentOperation = playlistTracks.get(trackKey)!.operation;
+
+      // Special case: If a track was marked for deletion and now is being added back,
+      // update it to be an addition
+      if (
+        currentOperation === TrackOperation.DELETE &&
+        operation === TrackOperation.ADD
+      ) {
+        console.log(
+          `Track ${trackKey} was previously marked for deletion but is now being re-added`
+        );
+        playlistTracks.set(trackKey, { track, operation: TrackOperation.ADD });
+      }
+      // If a track was added and now is being deleted, just delete it from our operations
+      // as there's no need to add then delete
+      else if (
+        currentOperation === TrackOperation.ADD &&
+        operation === TrackOperation.DELETE
+      ) {
+        console.log(
+          `Track ${trackKey} was pending addition but is now deleted - removing from operations`
+        );
+        playlistTracks.delete(trackKey);
+      }
+      // Otherwise update with the latest operation (shouldn't happen often)
+      else {
+        playlistTracks.set(trackKey, { track, operation });
+      }
+    }
+    // Otherwise, just add the track with its operation
+    else {
+      playlistTracks.set(trackKey, { track, operation });
     }
   }
 
   // Flush the cache and make actual API calls
   private async flushCache() {
-    if (this.trackCache.size === 0) {
-      return; // Nothing to flush
+    if (this.operationsCache.size === 0) {
+      return; // Nothing to process
     }
+
+    console.log(
+      "Flushing operations cache",
+      JSON.stringify(this.operationsCache)
+    );
 
     try {
       const token = await this.spotifyTokenCache.getToken();
 
-      // For each playlist, process all its tracks in one call
-      for (const [playlistId, tracks] of this.trackCache.entries()) {
-        // Bail if no tracks
-        if (tracks.length === 0) {
+      // For each playlist, process all its tracks operations
+      for (const [
+        playlistId,
+        operationsMap,
+      ] of this.operationsCache.entries()) {
+        // Skip empty playlists
+        if (operationsMap.size === 0) {
           continue;
         }
 
-        // Load the playlist ID from Spotify
-        const playlistInfo = await Spotify.getTracksFromPlaylist(
-          token.accessToken,
-          playlistId
-        );
-        if (!playlistInfo) {
-          console.error(`Playlist ${playlistId} not found on Spotify`);
-          continue;
-        }
-        // Check if tracks are already in the playlist
-        const existingTracks = playlistInfo.items.map((item) => item.track.uri);
-        const newTracks = new Set(tracks.map((track) => track.songId));
-        const tracksToAdd = tracks.filter(
-          (track) => !existingTracks.includes(track.songId)
-        );
-        if (tracksToAdd.length === 0) {
-          console.log(
-            `No new tracks to add for playlist ${playlistId}, skipping flush`
-          );
-          continue;
-        }
-        // Add the new tracks to the playlist
-        await Spotify.addTracksToPlaylist(
-          token.accessToken,
+        // Load the playlist ID from Spotify to get the name
+        const playlistInfo = await Spotify.getPlaylistDetails(
           playlistId,
-          tracksToAdd.map((track) => track.songId)
+          token.accessToken
         );
 
-        console.log(
-          `Flushed ${tracks.length} tracks for playlist ${playlistId}`
-        );
+        if (
+          !playlistInfo ||
+          !playlistInfo.name.toLocaleLowerCase().includes("aip")
+        ) {
+          console.log("Playlist name does not include 'aip', skipping update");
+          continue;
+        }
+
+        // Group tracks by operation type
+        const tracksToAdd: Osdk.Instance<SpotifyPlaylistTrack>[] = [];
+        const tracksToDelete: Osdk.Instance<SpotifyPlaylistTrack>[] = [];
+
+        for (const [_, entry] of operationsMap.entries()) {
+          if (entry.operation === TrackOperation.ADD) {
+            tracksToAdd.push(entry.track);
+          } else {
+            tracksToDelete.push(entry.track);
+          }
+        }
+
+        // Process additions if needed
+        if (tracksToAdd.length > 0) {
+          await this.processAdditions(
+            token.accessToken,
+            playlistId,
+            tracksToAdd
+          );
+        }
+
+        // Process deletions if needed
+        if (tracksToDelete.length > 0) {
+          await this.processDeletions(
+            token.accessToken,
+            playlistId,
+            tracksToDelete
+          );
+        }
       }
 
-      // Clear the cache after processing
-      this.trackCache.clear();
+      // Clear the operations cache after processing
+      this.operationsCache.clear();
     } catch (error) {
-      console.error("Error flushing track cache:", error);
+      console.error("Error flushing operations cache:", error);
     }
+  }
+
+  // Process track additions for a specific playlist
+  private async processAdditions(
+    accessToken: string,
+    playlistId: string,
+    tracks: Osdk.Instance<SpotifyPlaylistTrack>[]
+  ) {
+    // Load the playlist ID from Spotify
+    const playlistInfo = await Spotify.getTracksFromPlaylist(
+      accessToken,
+      playlistId
+    );
+
+    if (!playlistInfo) {
+      console.error(`Playlist ${playlistId} not found on Spotify`);
+      return;
+    }
+
+    // Check if tracks are already in the playlist
+    const existingTracks = playlistInfo.items.map((item) => item.track.uri);
+    const tracksToAdd = tracks.filter(
+      (track) => !existingTracks.includes(`spotify:track:${track.songId}`)
+    );
+
+    if (tracksToAdd.length === 0) {
+      console.log(
+        `No new tracks to add for playlist ${playlistId}, skipping addition`
+      );
+      return;
+    }
+
+    // Add the new tracks to the playlist
+    await Spotify.addTracksToPlaylist(
+      accessToken,
+      playlistId,
+      tracksToAdd.map((track) => `spotify:track:${track.songId}`)
+    );
+
+    console.log(`Added ${tracksToAdd.length} tracks to playlist ${playlistId}`);
+  }
+
+  // Process track deletions for a specific playlist
+  private async processDeletions(
+    accessToken: string,
+    playlistId: string,
+    tracks: Osdk.Instance<SpotifyPlaylistTrack>[]
+  ) {
+    if (tracks.length === 0) {
+      return;
+    }
+
+    console.log(
+      `Processing ${tracks.length} track deletions for playlist ${playlistId}`
+    );
+
+    // Remove the tracks from the playlist
+    await Spotify.removeTracksFromPlaylist(
+      accessToken,
+      playlistId,
+      tracks.map((track) => `spotify:track:${track.songId}`)
+    );
+
+    console.log(`Removed ${tracks.length} tracks from playlist ${playlistId}`);
   }
 }
